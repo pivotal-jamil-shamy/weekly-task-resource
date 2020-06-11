@@ -1,7 +1,6 @@
-# Crontab Resource
+# Weekly Task Resource
 
-Implements a resource that reports new versions when the current time
-matches the crontab expression
+Implements a resource that reports new versions when the current time matches the hour of the day and day of the week o fthe config.
 
 ---
 ## Update your pipeline
@@ -10,55 +9,54 @@ Update your pipeline to include this new declaration of resource types. See the 
 ```
 ---
 resource_types:
-- name: cron-resource
-  type: docker-image
+- name: weekly-task-resource
+  type: registry-image
   source:
-    repository: cftoolsmiths/cron-resource
+    repository: <image repo name>
 
 resources:
-  - name: 10-min-trigger
-    type: cron-resource
+  - name: thursdays-at-10-pm
+    type: weekly-task-resource
     source:
-      expression: "*/10 * * * *"
-      location: "America/New_York"
-      fire_immediately: true
+      day_to_fire: Thursday
+      hour_to_fire: 22
+      location: America/Toronto
 ```
 
 ## Source Configuration
-
-* `expression`: *Required.* The crontab expression:
-
-    |field       | allowed values |
-    |-------------|----------------|
-    |minute       | 0-59 |
-    |hour         | 0-23 |
-    |day of month | 1-31 |
-    |month        | 1-12 (or names, see below) |
-    |day of week  | 0-7 (0 or 7 is Sun, or use names) |
-
-  e.g.
-
-    `0 23 * * 1-5` # Run at 11:00pm from Monday to Friday
 
 * `location`: *Optional.* Defaults to UTC. Accepts any timezone that
   can be parsed by https://godoc.org/time#LoadLocation
 
   e.g.
-
-  `America/New_York`
+  
+  `America/Toronto`
 
   `America/Vancouver`
+  
+  `America/New_York`
+  
+* `day_to_fire`: The weekday you want this resource to fire. It accepts : `Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday`
 
-* `fire_immediately`: *Optional.* Defaults to false. Immediately triggers the resource the first time it is checked.
+  e.g.
+  
+  `Tuesday`
+
+  `Thursday`
+  
+* `hour_to_fire`: The hour of the day you want this resource to fire. It accepts whole numbers within the [0-23] range. This resource will only fire onnce during this hour. If the pipeline is paused during that hour, and then unpaused after it, it will not fire.
+
+  e.g.
+  
+  `21`
+
+  `19`
 
 ## Behavior
 
 ### `check`: Report the current time.
 
-Returns `time.Now()` as the version only if a minute since we last
-fired matches the crontab expression. The first time the script runs
-it will fire if a minute in the last hour matches the crontab
-expression.
+Returns `time.Now()` as the version only if we are within the hour of the `hour_to_fire` and on the day of `day_to_fire`. The first time the script runs it will fire if we happen to be in that interval.
 
 #### Parameters
 
@@ -81,7 +79,9 @@ version.
 You can test the behavior by simulating Concourse's invocations. For example:
 
 ```
-$ echo '{"source":{"expression":"* * * * *","location":"America/New_York"}}' \
-  | go run ./check
-[{"time":"2016-08-19T10:15:27.183011117-04:00"}]
+$ echo '{"version": {"time":"2020-05-08T09:10:57.725589-04:00"}, "source":{"hour_to_fire": 9 , "day_to_fire": "Thursday","location":"America/Toronto"}}' | go run ./check
+
+$ echo '{"source":{"hour_to_fire": 9 , "day_to_fire": "Thursday","location":"America/Toronto"}}' | go run ./check
+
+$ echo '{"source":{"hour_to_fire": 15 , "day_to_fire": "Monday","location":"America/Toronto"}}' | go run ./check
 ```
