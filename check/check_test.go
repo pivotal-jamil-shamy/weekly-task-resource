@@ -2,11 +2,8 @@ package main_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os/exec"
-	"time"
 
-	"github.com/mbrevoort/cronexpr"
 	"github.com/pivotal-cf-experimental/cron-resource/models"
 
 	. "github.com/onsi/ginkgo"
@@ -22,195 +19,139 @@ var _ = Describe("Check", func() {
 		checkCmd = exec.Command(checkPath)
 	})
 
-	Context("MustParse", func() {
-		It("can parse crontab expressions", func() {
-			expr := cronexpr.MustParse("* * * * 0-5")
-			Expect(expr).ToNot(BeNil())
-		})
+	var request models.CheckRequest
+	var session *gexec.Session
+
+	BeforeEach(func() {
+		request = models.CheckRequest{
+			Source: models.Source{
+				Location:   "America/Toronto",
+				HourToFire: 17,
+				DayToFire:  "Sunday",
+			},
+		}
 	})
 
-	Context("when a crontab expression is specified", func() {
-		var request models.CheckRequest
-		var response models.CheckResponse
-		var session *gexec.Session
+	JustBeforeEach(func() {
+		stdin, err := checkCmd.StdinPipe()
+		Expect(err).ShouldNot(HaveOccurred())
 
-		BeforeEach(func() {
-			request = models.CheckRequest{
-				Source: models.Source{
-					Location: "America/New_York",
-				},
-			}
-			response = models.CheckResponse{}
+		session, err = gexec.Start(checkCmd, GinkgoWriter, GinkgoWriter)
+		Expect(err).ShouldNot(HaveOccurred())
+
+		err = json.NewEncoder(stdin).Encode(request)
+		Expect(err).ShouldNot(HaveOccurred())
+	})
+
+	Describe("resource config validation", func() {
+		Describe("Day To Fire", func() {
+
+			Context("when given day is invalid", func() {
+				BeforeEach(func() {
+					request.Source.DayToFire = "snoopyday"
+				})
+
+				It("exits with status code 1 and a proper message", func() {
+					Eventually(session.Err).Should(gbytes.Say("\"day_to_fire\" should be one of the following: \"Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday\""))
+					Eventually(session).Should(gexec.Exit(1))
+				})
+			})
+
+			Context("when given day is a valid weekday", func() {
+				BeforeEach(func() {
+					request.Source.DayToFire = "Saturday"
+				})
+
+				It("exits with status code 0 and no errors", func() {
+					Eventually(session.Err.Closed).Should(BeTrue())
+					Eventually(session.Err.Contents).Should(BeEmpty())
+					Eventually(session).Should(gexec.Exit(0))
+				})
+
+				Context("when the given day is mixed case", func() {
+					BeforeEach(func() {
+						request.Source.DayToFire = "fRiDaY"
+					})
+
+					It("exits with status code 0 and no errors", func() {
+						Eventually(session.Err.Closed).Should(BeTrue())
+						Eventually(session.Err.Contents).Should(BeEmpty())
+						Eventually(session).Should(gexec.Exit(0))
+					})
+				})
+
+				Context("when the given day is not trimmed", func() {
+					BeforeEach(func() {
+						request.Source.DayToFire = "    Tuesday    "
+					})
+
+					It("exits with status code 0 and no errors", func() {
+						Eventually(session.Err.Closed).Should(BeTrue())
+						Eventually(session.Err.Contents).Should(BeEmpty())
+						Eventually(session).Should(gexec.Exit(0))
+					})
+				})
+			})
+
 		})
 
-		JustBeforeEach(func() {
-			stdin, err := checkCmd.StdinPipe()
-			Expect(err).ShouldNot(HaveOccurred())
+		Describe("Hour To Fire", func() {
+			Context("when given hour is less than zero", func() {
+				BeforeEach(func() {
+					request.Source.HourToFire = -2
+				})
 
-			session, err = gexec.Start(checkCmd, GinkgoWriter, GinkgoWriter)
-			Expect(err).ShouldNot(HaveOccurred())
+				It("exits with status code 1 and a proper message", func() {
+					Eventually(session.Err).Should(gbytes.Say("\"hour_to_fire\" should be in the 0-23 range"))
+					Eventually(session).Should(gexec.Exit(1))
+				})
+			})
 
-			err = json.NewEncoder(stdin).Encode(request)
-			Expect(err).ShouldNot(HaveOccurred())
+			Context("when given hour is greater than 23", func() {
+				BeforeEach(func() {
+					request.Source.HourToFire = 25
+				})
+
+				It("exits with status code 1 and a proper message", func() {
+					Eventually(session.Err).Should(gbytes.Say("\"hour_to_fire\" should be in the 0-23 range"))
+					Eventually(session).Should(gexec.Exit(1))
+				})
+			})
+
+			Context("when given hour is within range", func() {
+				BeforeEach(func() {
+					request.Source.HourToFire = 23
+				})
+
+				It("exits with status code 0 and no error", func() {
+					Eventually(session.Err.Closed).Should(BeTrue())
+					Eventually(session.Err.Contents).Should(BeEmpty())
+					Eventually(session).Should(gexec.Exit(0))
+				})
+			})
 		})
 
-		Context("the expression is invalid", func() {
-			It("exits with status code 1", func() {
-				request.Source.Expression = "invalid"
-				Eventually(session.Err).Should(gbytes.Say("invalid crontab expression"))
-				Eventually(session).Should(gexec.Exit(1))
-			})
-		})
-
-		Context("expression is valid", func() {
-			JustBeforeEach(func() {
-				Eventually(session).Should(gexec.Exit(0))
-
-				err := json.Unmarshal(session.Out.Contents(), &response)
-				Expect(err).ShouldNot(HaveOccurred())
-			})
-
-			Context("wildcard expression", func() {
+		Describe("Timezone", func() {
+			Context("when given timezone is invalid", func() {
 				BeforeEach(func() {
-					request.Source.Expression = "* * * * *"
+					request.Source.Location = "America/China"
 				})
 
-				Context("when no version is given", func() {
-					It("outputs time.Now()", func() {
-						Expect(response).To(HaveLen(1))
-						Expect(response[0].Time.Unix()).To(BeNumerically("~", time.Now().Unix(), 1))
-					})
-				})
-
-				Context("when a version is given", func() {
-					Context("when the resource has already triggered in that minute", func() {
-						BeforeEach(func() {
-							request.Version.Time = time.Now()
-						})
-
-						It("doesn't print anything", func() {
-							Expect(response).To(BeEmpty())
-						})
-					})
-
-					Context("when the resource hasn't triggered in that minute", func() {
-						BeforeEach(func() {
-							request.Version.Time = time.Now().Add(-2 * time.Minute)
-						})
-
-						It("outputs time.Now()", func() {
-							Expect(response).To(HaveLen(1))
-							Expect(response[0].Time.Unix()).To(BeNumerically("~", time.Now().Unix(), 1))
-						})
-					})
+				It("exits with status code 1 and a proper message", func() {
+					Eventually(session.Err).Should(gbytes.Say("unknown time zone"))
+					Eventually(session).Should(gexec.Exit(1))
 				})
 			})
 
-			Context("when given a crontab expression that triggers 30 minutes ago", func() {
+			Context("when given timezone is valid", func() {
 				BeforeEach(func() {
-					halfHourAgo := time.Now().Add(-30 * time.Minute)
-					request.Source.Expression = fmt.Sprintf("%d * * * *", halfHourAgo.Minute())
+					request.Source.Location = "Asia/Beirut"
 				})
 
-				Context("when no version is given", func() {
-					It("outputs time.Now()", func() {
-						Expect(response).To(HaveLen(1))
-						Expect(response[0].Time.Unix()).To(BeNumerically("~", time.Now().Unix(), 1))
-					})
-				})
-			})
-
-			Context("when given a crontab expression that triggers in the previous hour", func() {
-				BeforeEach(func() {
-					request.Source.Expression = fmt.Sprintf("0 %d * * *", (time.Now().Hour()+24-1)%24)
-				})
-
-				Context("when no version is given", func() {
-					It("doesn't output any versions", func() {
-						Expect(response).To(BeEmpty())
-					})
-
-					Context("when FireImmediately is true", func() {
-						BeforeEach(func() {
-							request.Source.FireImmediately = true
-						})
-
-						It("outputs time.Now()", func() {
-							Expect(response).To(HaveLen(1))
-							Expect(response[0].Time.Unix()).To(BeNumerically("~", time.Now().Unix(), 1))
-						})
-					})
-				})
-
-				Context("when a version that is a day old is given", func() {
-					BeforeEach(func() {
-						request.Version.Time = time.Now().Add(-25 * time.Hour)
-					})
-
-					It("outputs time.Now()", func() {
-						Expect(response).To(HaveLen(1))
-						Expect(response[0].Time.Unix()).To(BeNumerically("~", time.Now().Unix(), 1))
-					})
-				})
-
-				Context("when a version is given", func() {
-					BeforeEach(func() {
-						request.Version.Time = time.Now().Add(-1 * time.Hour)
-					})
-
-					It("doesn't output any versions", func() {
-						Expect(response).To(BeEmpty())
-					})
-				})
-			})
-
-			Context("Timezones", func() {
-				var loc *time.Location
-				var err error
-
-				Context("when a different timezone is specified", func() {
-					BeforeEach(func() {
-						request.Source.Location = "America/Vancouver"
-						loc, err = time.LoadLocation("America/Vancouver")
-						Expect(err).NotTo(HaveOccurred())
-					})
-
-					Context("when given a crontab expression that triggers in the current hour in the given timezone", func() {
-
-						BeforeEach(func() {
-							request.Source.Expression = fmt.Sprintf("* %d * * *", time.Now().In(loc).Hour())
-						})
-
-						It("outputs time.Now()", func() {
-							Expect(response).To(HaveLen(1))
-							Expect(response[0].Time.Unix()).To(BeNumerically("~", time.Now().Unix(), 1))
-							_, offset := response[0].Time.Zone()
-							_, expectedOffset := time.Now().In(loc).Zone()
-							Expect(offset).To(Equal(expectedOffset))
-						})
-					})
-				})
-
-				Context("when no timezone is given", func() {
-					BeforeEach(func() {
-						request.Source.Location = ""
-						loc, err = time.LoadLocation("UTC")
-						Expect(err).NotTo(HaveOccurred())
-					})
-
-					Context("when given a crontab expression that triggers in the current hour", func() {
-						BeforeEach(func() {
-							request.Source.Expression = fmt.Sprintf("* %d * * *", time.Now().In(loc).Hour())
-						})
-
-						It("outputs time.Now()", func() {
-							Expect(response).To(HaveLen(1))
-							Expect(response[0].Time.Unix()).To(BeNumerically("~", time.Now().Unix(), 1))
-							_, offset := response[0].Time.Zone()
-							_, expectedOffset := time.Now().In(loc).Zone()
-							Expect(offset).To(Equal(expectedOffset))
-						})
-					})
+				It("exits with status code 0 and no error", func() {
+					Eventually(session.Err.Closed).Should(BeTrue())
+					Eventually(session.Err.Contents).Should(BeEmpty())
+					Eventually(session).Should(gexec.Exit(0))
 				})
 			})
 		})

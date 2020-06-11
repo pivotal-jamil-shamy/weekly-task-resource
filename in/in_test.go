@@ -44,8 +44,7 @@ var _ = Describe("In", func() {
 			request = models.InRequest{
 				Version: models.Version{Time: time.Now()},
 				Source: models.Source{
-					Expression: "* * * * *",
-					Location:   "America/New_York",
+					Location: "America/New_York",
 				},
 			}
 
